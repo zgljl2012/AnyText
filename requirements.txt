@@ -1,0 +1,7 @@
+pytorch-lightning>=1.5.0
+jieba==0.42.1
+subword_nmt==0.3.8
+sacremoses==0.0.53
+tensorflow==2.13.0
+typing_extensions==4.6.1
+gradio==3.50.0

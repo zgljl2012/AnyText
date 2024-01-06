@@ -42,9 +42,13 @@ def draw_glyph(font, text):
     text_height = max(bottom - top, 5)
     ratio = min(W*0.9/text_width, H*0.9/text_height)
     new_font = font.font_variant(size=int(g_size*ratio))
-
-    text_width, text_height = new_font.getsize(text)
-    offset_x, offset_y = new_font.getoffset(text)
+    # https://github.com/ultralytics/yolov5/issues/11838#issuecomment-1735969956
+    # text_width, text_height = new_font.getlength(text)
+    left, top, right, bottom = new_font.getbbox(text)
+    text_width = right - left
+    text_height = bottom - top
+    # offset_x, offset_y = new_font.getoffset(text)
+    offset_y = top
     x = (img.width - text_width) // 2
     y = (img.height - text_height) // 2 - offset_y//2
     draw.text((x, y), text, font=new_font, fill='white')

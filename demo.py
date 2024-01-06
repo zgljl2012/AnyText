@@ -233,7 +233,7 @@ def resize_h(h, img1, img2):
 is_t2i = 'true'
 block = gr.Blocks(css='style.css', theme=gr.themes.Soft()).queue()
 
-with open('javascript/bboxHint.js', 'r') as file:
+with open('javascript/bboxHint.js', 'r', encoding='utf-8') as file:
     value = file.read()
 escaped_value = json.dumps(value)
 

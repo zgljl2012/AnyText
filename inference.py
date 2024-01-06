@@ -1,5 +1,6 @@
 from modelscope.pipelines import pipeline
 from util import save_images
+
 pipe = pipeline('my-anytext-task', model='damo/cv_anytext_text_generation_editing', model_revision='v1.1.1')
 img_save_folder = "SaveImages"
 params = {
