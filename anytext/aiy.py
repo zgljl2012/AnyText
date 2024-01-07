@@ -32,6 +32,8 @@ class AiyAnyText:
             "show_debug": show_debug,
             "image_count": image_count,
             "ddim_steps": n_steps,
+            "image_width": 512,
+            "image_height": 512
         }
 
         # 1. text generation
