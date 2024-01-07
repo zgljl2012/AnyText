@@ -374,7 +374,9 @@ class ControlLDM(LatentDiffusion):
                 args = edict()
                 args.rec_image_shape = "3, 48, 320"
                 args.rec_batch_num = 6
-                args.rec_char_dict_path = './ocr_recog/ppocr_keys_v1.txt'
+                import os
+                DIR = os.path.dirname(os.path.dirname(__file__))
+                args.rec_char_dict_path = os.path.join(DIR, 'ocr_recog/ppocr_keys_v1.txt')
                 args.use_fp16 = self.use_fp16
                 self.cn_recognizer = TextRecognizer(args, self.text_predictor)
                 for param in self.text_predictor.parameters():
