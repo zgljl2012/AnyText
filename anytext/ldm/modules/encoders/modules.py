@@ -5,7 +5,7 @@ from torch.utils.checkpoint import checkpoint
 from transformers import T5Tokenizer, T5EncoderModel, CLIPTokenizer, CLIPTextModel, AutoProcessor, CLIPVisionModelWithProjection
 
 import open_clip
-from ldm.util import count_params
+from anytext.ldm.util import count_params
 
 
 def _expand_mask(mask, dtype, tgt_len=None):

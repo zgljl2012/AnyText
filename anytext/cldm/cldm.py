@@ -5,7 +5,7 @@ import torch.nn as nn
 import copy
 from easydict import EasyDict as edict
 
-from ldm.modules.diffusionmodules.util import (
+from anytext.ldm.modules.diffusionmodules.util import (
     conv_nd,
     linear,
     zero_module,
@@ -14,12 +14,12 @@ from ldm.modules.diffusionmodules.util import (
 
 from einops import rearrange, repeat
 from torchvision.utils import make_grid
-from ldm.modules.attention import SpatialTransformer
-from ldm.modules.diffusionmodules.openaimodel import UNetModel, TimestepEmbedSequential, ResBlock, Downsample, AttentionBlock
-from ldm.models.diffusion.ddpm import LatentDiffusion
-from ldm.util import log_txt_as_img, exists, instantiate_from_config
-from ldm.models.diffusion.ddim import DDIMSampler
-from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
+from anytext.ldm.modules.attention import SpatialTransformer
+from anytext.ldm.modules.diffusionmodules.openaimodel import UNetModel, TimestepEmbedSequential, ResBlock, Downsample, AttentionBlock
+from anytext.ldm.models.diffusion.ddpm import LatentDiffusion
+from anytext.ldm.util import log_txt_as_img, exists, instantiate_from_config
+from anytext.ldm.models.diffusion.ddim import DDIMSampler
+from anytext.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from .recognizer import TextRecognizer, create_predictor
 
 

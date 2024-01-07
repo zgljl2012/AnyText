@@ -5,7 +5,7 @@ import ldm.modules.encoders.modules
 import ldm.modules.attention
 
 from transformers import logging
-from ldm.modules.attention import default
+from anytext.ldm.modules.attention import default
 
 
 def disable_verbosity():
