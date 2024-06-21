@@ -5,7 +5,7 @@ import random
 import math
 from PIL import Image, ImageDraw, ImageFont
 from torch.utils.data import Dataset, DataLoader
-from dataset_util import load, show_bbox_on_image
+from anytext.dataset_util import load, show_bbox_on_image
 
 
 phrase_list = [

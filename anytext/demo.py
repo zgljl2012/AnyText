@@ -11,9 +11,14 @@ import gradio as gr
 import numpy as np
 import re
 from gradio.components import Component
-from util import check_channels, resize_image, save_images
+from anytext.util import check_channels, resize_image, save_images
 import json
 import argparse
+import sys
+from anytext import cldm
+import os
+
+sys.path.append(os.path.dirname(__file__))
 
 
 BBOX_MAX_NUM = 8
@@ -38,7 +43,7 @@ def parse_args():
     parser.add_argument(
         "--font_path",
         type=str,
-        default='font/Arial_Unicode.ttf',
+        default='anytext/font/Arial_Unicode.ttf',
         help="path of a font file"
     )
     args = parser.parse_args()
@@ -47,7 +52,7 @@ def parse_args():
 
 args = parse_args()
 if load_model:
-    inference = pipeline('my-anytext-task', model='damo/cv_anytext_text_generation_editing', model_revision='v1.1.1', use_fp16=not args.use_fp32, use_translator=not args.no_translator, font_path=args.font_path)
+    inference = pipeline('my-anytext-task', cfg_path="anytext/models_yaml/anytext_sd15.yaml", model='damo/cv_anytext_text_generation_editing', model_revision='v1.1.1', use_fp16=False, use_translator=not args.no_translator, font_path=args.font_path)
 
 
 def count_lines(prompt):
