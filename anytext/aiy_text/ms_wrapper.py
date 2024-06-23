@@ -41,6 +41,12 @@ max_chars = 20
 
 from .utils import is_chinese, separate_pos_imgs, arr2tensor, find_polygon
 
+
+def noise_like(shape, device, repeat=False):
+    repeat_noise = lambda: torch.randn((1, *shape[1:]), device=device).repeat(shape[0], *((1,) * (len(shape) - 1)))
+    noise = lambda: torch.randn(shape, device=device)
+    return repeat_noise() if repeat else noise()
+
 class AnyTextModel(torch.nn.Module):
 
     def __init__(self, model_dir, **kwargs):
@@ -58,6 +64,7 @@ class AnyTextModel(torch.nn.Module):
         debug_info: string for debug, only valid if show_debug=True
     """
 
+    @torch.no_grad()
     def forward(self, input_tensor, **forward_params):
         tic = time.time()
         str_warning = ""
@@ -271,17 +278,90 @@ class AnyTextModel(torch.nn.Module):
         shape = (4, h // 8, w // 8)
         self.model.control_scales = [strength] * 13
         
+        #------------------------------------------
+        conditioning= cond
+        batch_size = img_count
+        unconditional_guidance_scale = cfg_scale
+        unconditional_conditioning = un_cond
         
-        samples = self.ddim_sampler.sample(
-            ddim_steps,
-            img_count,
-            shape,
-            cond,
-            verbose=False,
-            eta=eta,
-            unconditional_guidance_scale=cfg_scale,
-            unconditional_conditioning=un_cond,
+        assert isinstance(conditioning, dict)
+        ctmp = conditioning[list(conditioning.keys())[0]]
+        while isinstance(ctmp, list):
+            ctmp = ctmp[0]
+        cbs = ctmp.shape[0]
+        if cbs != batch_size:
+            print(
+                f"Warning: Got {cbs} conditionings but batch-size is {batch_size}"
+            )
+        
+        from diffusers.schedulers import DDIMScheduler
+        model_path = "E://civital/dreamshaper_8LCM"
+        scheduler: DDIMScheduler = DDIMScheduler.from_pretrained(
+            model_path, subfolder="scheduler"
         )
+
+        self.ddim_sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=eta, verbose=False)
+        # sampling
+        C, H, W = shape
+        shape = (batch_size, C, H, W)
+        print(f"Data shape for DDIM sampling is {shape}, eta {eta}")
+        
+        #------
+        device = self.model.betas.device
+        b = shape[0]
+
+        timesteps = self.ddim_sampler.ddim_timesteps
+
+        time_range = np.flip(timesteps)
+        total_steps = timesteps.shape[0]
+        print(f"Running DDIM Sampling with {total_steps} timesteps")
+
+        img = torch.randn(shape, device=device)
+        from tqdm import tqdm
+        iterator = tqdm(time_range, desc="DDIM Sampler", total=total_steps)
+
+        for i, step in enumerate(iterator):
+            index = total_steps - i - 1
+            ts = torch.full((b,), step, device=device, dtype=torch.long)
+
+            #-----------------------------------------------------------------------
+            x = img
+            c = cond
+            t = ts
+            b, *_, device = *x.shape, x.device
+            
+            # 先完全忽略负面提示词
+            # assert unconditional_conditioning is None
+            model_output = self.model.apply_model(x, t, c)
+            # self.model.parameterization == 'eps'
+            e_t = model_output
+
+            alphas = self.ddim_sampler.ddim_alphas
+            alphas_prev = self.ddim_sampler.ddim_alphas_prev
+            sqrt_one_minus_alphas = self.ddim_sampler.ddim_sqrt_one_minus_alphas
+            sigmas = self.ddim_sampler.ddim_sigmas
+            # select parameters corresponding to the currently considered timestep
+            a_t = torch.full((b, 1, 1, 1), alphas[index], device=device)
+            a_prev = torch.full((b, 1, 1, 1), alphas_prev[index], device=device)
+            sigma_t = torch.full((b, 1, 1, 1), sigmas[index], device=device)
+            sqrt_one_minus_at = torch.full(
+                (b, 1, 1, 1), sqrt_one_minus_alphas[index], device=device
+            )
+
+            # current prediction for x_0
+            pred_x0 = (x - sqrt_one_minus_at * e_t) / a_t.sqrt()
+
+            # direction pointing to x_t
+            dir_xt = (1.0 - a_prev - sigma_t**2).sqrt() * e_t
+            noise = sigma_t * noise_like(x.shape, device, False)
+            x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
+            
+            #-------------------------------------------------------------------------
+            img, _ = x_prev, pred_x0
+
+        samples = img
+
+        #--------------------------------------
         
         
         if self.use_fp16:
