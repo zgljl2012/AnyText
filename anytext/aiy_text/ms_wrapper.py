@@ -39,6 +39,7 @@ BBOX_MAX_NUM = 8
 PLACE_HOLDER = "*"
 max_chars = 20
 
+from .utils import is_chinese, separate_pos_imgs, arr2tensor, find_polygon
 
 class AnyTextModel(torch.nn.Module):
 
@@ -142,7 +143,7 @@ class AnyTextModel(torch.nn.Module):
         pos_imgs = cv2.convertScaleAbs(pos_imgs)
         _, pos_imgs = cv2.threshold(pos_imgs, 254, 255, cv2.THRESH_BINARY)
         # seprate pos_imgs
-        pos_imgs = self.separate_pos_imgs(pos_imgs, sort_priority)
+        pos_imgs = separate_pos_imgs(pos_imgs, sort_priority)
         if len(pos_imgs) == 0:
             pos_imgs = [np.zeros((h, w, 1))]
         if len(pos_imgs) < n_lines:
@@ -167,7 +168,7 @@ class AnyTextModel(torch.nn.Module):
                     if len(input_pos.shape) == 2
                     else input_pos
                 )
-                poly, pos_img = self.find_polygon(input_pos)
+                poly, pos_img = find_polygon(input_pos)
                 pre_pos += [pos_img / 255.0]
                 poly_list += [poly]
             else:
@@ -241,9 +242,9 @@ class AnyTextModel(torch.nn.Module):
                     np.zeros((h * gly_scale, w * gly_scale, 1))
                 ]  # for show
             pos = pre_pos[i]
-            info["glyphs"] += [self.arr2tensor(glyphs, img_count)]
-            info["gly_line"] += [self.arr2tensor(gly_line, img_count)]
-            info["positions"] += [self.arr2tensor(pos, img_count)]
+            info["glyphs"] += [arr2tensor(glyphs, img_count)]
+            info["gly_line"] += [arr2tensor(gly_line, img_count)]
+            info["positions"] += [arr2tensor(pos, img_count)]
         # get masked_x
         masked_img = ((edit_image.astype(np.float32) / 127.5) - 1.0) * (1 - np_hint)
         masked_img = np.transpose(masked_img, (2, 0, 1))
@@ -256,7 +257,7 @@ class AnyTextModel(torch.nn.Module):
             masked_x = masked_x.half()
         info["masked_x"] = torch.cat([masked_x for _ in range(img_count)], dim=0)
 
-        hint = self.arr2tensor(np_hint, img_count)
+        hint = arr2tensor(np_hint, img_count)
         cond = self.model.get_learned_conditioning(
             dict(
                 c_concat=[hint],
@@ -269,7 +270,9 @@ class AnyTextModel(torch.nn.Module):
         )
         shape = (4, h // 8, w // 8)
         self.model.control_scales = [strength] * 13
-        samples, intermediates = self.ddim_sampler.sample(
+        
+        
+        samples = self.ddim_sampler.sample(
             ddim_steps,
             img_count,
             shape,
@@ -279,6 +282,8 @@ class AnyTextModel(torch.nn.Module):
             unconditional_guidance_scale=cfg_scale,
             unconditional_conditioning=un_cond,
         )
+        
+        
         if self.use_fp16:
             samples = samples.half()
         x_samples = self.model.decode_first_stage(samples)
@@ -352,143 +357,10 @@ class AnyTextModel(torch.nn.Module):
         else:
             for s in strs:
                 prompt = prompt.replace(f'"{s}"', f" {PLACE_HOLDER} ", 1)
-        if self.is_chinese(prompt):
+        if is_chinese(prompt):
             if self.trans_pipe is None:
                 return None, None
             old_prompt = prompt
             prompt = self.trans_pipe(input=prompt + " .")["translation"][:-1]
             print(f"Translate: {old_prompt} --> {prompt}")
         return prompt, strs
-
-    def is_chinese(self, text):
-        text = checker._clean_text(text)
-        for char in text:
-            cp = ord(char)
-            if checker._is_chinese_char(cp):
-                return True
-        return False
-
-    def separate_pos_imgs(self, img, sort_priority, gap=102):
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(img)
-        components = []
-        for label in range(1, num_labels):
-            component = np.zeros_like(img)
-            component[labels == label] = 255
-            components.append((component, centroids[label]))
-        if sort_priority == "↕":
-            fir, sec = 1, 0  # top-down first
-        elif sort_priority == "↔":
-            fir, sec = 0, 1  # left-right first
-        components.sort(key=lambda c: (c[1][fir] // gap, c[1][sec] // gap))
-        sorted_components = [c[0] for c in components]
-        return sorted_components
-
-    def find_polygon(self, image, min_rect=False):
-        contours, hierarchy = cv2.findContours(
-            image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-        )
-        max_contour = max(contours, key=cv2.contourArea)  # get contour with max area
-        if min_rect:
-            # get minimum enclosing rectangle
-            rect = cv2.minAreaRect(max_contour)
-            poly = np.int0(cv2.boxPoints(rect))
-        else:
-            # get approximate polygon
-            epsilon = 0.01 * cv2.arcLength(max_contour, True)
-            poly = cv2.approxPolyDP(max_contour, epsilon, True)
-            n, _, xy = poly.shape
-            poly = poly.reshape(n, xy)
-        cv2.drawContours(image, [poly], -1, 255, -1)
-        return poly, image
-
-    def arr2tensor(self, arr, bs):
-        arr = np.transpose(arr, (2, 0, 1))
-        _arr = torch.from_numpy(arr.copy()).float().cuda()
-        if self.use_fp16:
-            _arr = _arr.half()
-        _arr = torch.stack([_arr for _ in range(bs)], dim=0)
-        return _arr
-
-class AnyTextPreprocessor(ABC):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.trainsforms = self.init_preprocessor(**kwargs)
-
-    def __call__(self, results):
-        return self.trainsforms(results)
-
-    def init_preprocessor(self, **kwarg):
-        """Provide default implementation based on preprocess_cfg and user can reimplement it.
-        if nothing to do, then return lambda x: x
-        """
-        return lambda x: x
-
-
-class AnyTextPipeline(Pipeline):
-
-    def __init__(self, model, preprocessor=None, **kwargs):
-        assert isinstance(model, str) or isinstance(
-            model, Model
-        ), "model must be a single str or Model"
-        if isinstance(model, str):
-            if not os.path.exists(model):
-                raise Exception(f"{model=} not exists")
-            pipe_model = AnyTextModel(model_dir=model, **kwargs)
-        elif isinstance(model, Model):
-            pipe_model = model
-        else:
-            raise NotImplementedError
-        pipe_model.eval()
-        if preprocessor is None:
-            preprocessor = AnyTextPreprocessor()
-        super().__init__(model=pipe_model, preprocessor=preprocessor, **kwargs)
-
-    def _sanitize_parameters(self, **pipeline_parameters):
-        return {}, pipeline_parameters, {}
-
-    def _check_input(self, inputs):
-        pass
-
-    def _check_output(self, outputs):
-        pass
-
-    def forward(self, inputs, **forward_params):
-        return super().forward(inputs, **forward_params)
-
-    def postprocess(self, inputs):
-        return inputs
-
-    def __call__(self, input: Union[Input, List[Input]], *args,
-                 **kwargs) -> Union[Dict[str, Any], Generator]:
-        # model provider should leave it as it is
-        # modelscope library developer will handle this function
-        # place model to cpu or gpu
-        if (self.model or (self.has_multiple_models and self.models[0])):
-            if not self._model_prepare:
-                self.prepare_model()
-
-        # simple showcase, need to support iterator type for both tensorflow and pytorch
-        # input_dict = self._handle_input(input)
-
-        # sanitize the parameters
-        batch_size = kwargs.pop('batch_size', None)
-        preprocess_params, forward_params, postprocess_params = self._sanitize_parameters(
-            **kwargs)
-        kwargs['preprocess_params'] = preprocess_params
-        kwargs['forward_params'] = forward_params
-        kwargs['postprocess_params'] = postprocess_params
-        if isinstance(input, list):
-            if batch_size is None:
-                output = []
-                for ele in input:
-                    output.append(self._process_single(ele, *args, **kwargs))
-            else:
-                output = self._process_batch(input, batch_size, **kwargs)
-
-        elif isinstance(input, MsDataset):
-            return self._process_iterator(input, *args, **kwargs)
-
-        else:
-            output = self._process_single(input, *args, **kwargs)
-        return output
