@@ -116,12 +116,13 @@ def anytext1():
     from anytext.t3_dataset import draw_glyph, draw_glyph2
     from PIL import ImageFont
 
-    model_path = "E://civital/dreamshaper_8LCM"
+    # model_path = "E://civital/dreamshaper_8LCM"
+    model_path = 'D:\workspace/aiy-server\data\models\huggingface/runwayml\stable-diffusion-v1-5'
     dtype = torch.float16
     device = torch.device("cuda")
     height = 512
     width = 512
-    prompt = 'photo of caramel macchiato coffee on the table, top-down perspective, with "Any" written on it using cream'
+    prompt = '1 paper on the table, top-down perspective, with "Any" written on it using red pen'
     use_fp16 = True
     ### AnyText: text embedding module
     font_path = "anytext/font/Arial_Unicode.ttf"
@@ -312,7 +313,8 @@ def anytext1():
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
     # scheduler
-    scheduler: LCMScheduler = LCMScheduler.from_pretrained(
+    from diffusers.schedulers import DDIMScheduler
+    scheduler: DDIMScheduler = DDIMScheduler.from_pretrained(
         model_path, subfolder="scheduler"
     )
     scheduler.set_timesteps(n_steps, device=device)
