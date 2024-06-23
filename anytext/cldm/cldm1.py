@@ -349,7 +349,6 @@ class ControlLDM(LatentDiffusion):
 
     def __init__(self, control_stage_config, control_key, glyph_key, position_key, only_mid_control, loss_alpha=0, loss_beta=0, with_step_weight=False, use_vae_upsample=False, latin_weight=1.0, embedding_manager_config=None, *args, **kwargs):
         self.use_fp16 = kwargs.pop('use_fp16', False)
-        print('----->>>>>11111')
         super().__init__(*args, **kwargs)
         self.control_model = instantiate_from_config(control_stage_config)
         self.control_key = control_key

@@ -82,10 +82,12 @@ class EmbeddingManager(nn.Module):
             placeholder_string='*',
             add_pos=False,
             emb_type='ocr',
+            use_fp16=False,
             **kwargs
     ):
         super().__init__()
         if hasattr(embedder, 'tokenizer'):  # using Stable Diffusion's CLIP encoder
+            print('using Stable Diffusion\'s CLIP encoder')
             get_token_for_string = partial(get_clip_token_for_string, embedder.tokenizer)
             token_dim = 768
             if hasattr(embedder, 'vit'):
@@ -103,6 +105,8 @@ class EmbeddingManager(nn.Module):
             self.position_encoder = EncodeNet(position_channels, token_dim)
         if emb_type == 'ocr':
             self.proj = linear(40*64, token_dim)
+            if use_fp16:
+                self.proj = self.proj.cuda().to(dtype=torch.float16)
         if emb_type == 'conv':
             self.glyph_encoder = EncodeNet(glyph_channels, token_dim)
 

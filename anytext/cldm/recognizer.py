@@ -72,7 +72,7 @@ def crop_image(src_img, mask):
     return result
 
 
-def create_predictor(model_dir=None, model_lang='ch', is_onnx=False):
+def create_predictor(model_dir=None, model_lang='ch', is_onnx=False, use_fp16=False):
     model_file_path = model_dir
     if model_file_path is not None and not os.path.exists(model_file_path):
         raise ValueError("not find model file path {}".format(model_file_path))
@@ -96,9 +96,13 @@ def create_predictor(model_dir=None, model_lang='ch', is_onnx=False):
         )
 
         rec_model = RecModel(rec_config)
+        if use_fp16:
+            rec_model = rec_model.cuda()
         if model_file_path is not None:
             rec_model.load_state_dict(torch.load(model_file_path, map_location="cpu"))
             rec_model.eval()
+        if use_fp16:
+            rec_model = rec_model.to(dtype=torch.float16)
         return rec_model.eval()
 
 
