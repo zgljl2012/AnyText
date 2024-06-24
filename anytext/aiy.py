@@ -25,7 +25,6 @@ def pipeline(model: str = None,
     pipeline_props['font_path'] = font_path
     # return AnyTextPipeline(**pipeline_props)
     pipe_model = AnyTextModel(model_dir=model, **pipeline_props)
-    pipe_model = pipe_model.to(torch.device('cuda'))
     return pipe_model
 
 class AiyAnyText:

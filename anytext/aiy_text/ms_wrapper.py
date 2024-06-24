@@ -34,7 +34,7 @@ def noise_like(shape, device, repeat=False):
     noise = lambda: torch.randn(shape, device=device)
     return repeat_noise() if repeat else noise()
 
-class AnyTextModel(torch.nn.Module):
+class AnyTextModel:
 
     def __init__(self, model_dir, **kwargs):
         super().__init__()
@@ -52,7 +52,7 @@ class AnyTextModel(torch.nn.Module):
     """
 
     @torch.no_grad()
-    def forward(self, input_tensor, **forward_params):
+    def __call__(self, input_tensor, **forward_params):
         # get inputs
         seed = input_tensor.get("seed", -1)
         if seed == -1:
