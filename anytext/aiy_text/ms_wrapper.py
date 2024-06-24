@@ -8,7 +8,7 @@ Copyright (c) Alibaba, Inc. and its affiliates.
 import os
 from typing import Any, Dict, List, Union, Generator
 
-from anytext.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
+from anytext.ldm.models.diffusion.ddpm import DiffusionWrapper
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 import torch
@@ -385,8 +385,29 @@ class AnyTextModel(torch.nn.Module):
         extra_step_kwargs = prepare_extra_step_kwargs(scheduler, generator, eta)
         
         #------------------- UNET model------------------------
-        
+        unet_config = dict(
+            image_size= 32, # unused
+            in_channels= 4,
+            out_channels= 4,
+            model_channels= 320,
+            attention_resolutions= [ 4, 2, 1 ],
+            num_res_blocks= 2,
+            channel_mult= [ 1, 2, 4, 4 ],
+            num_heads= 8,
+            use_spatial_transformer= True,
+            transformer_depth= 1,
+            context_dim=768,
+            use_checkpoint= True,
+            legacy= False
+        )
+        from cldm.cldm import ControlledUnetModel
+        unet = ControlledUnetModel(**unet_config)
+        unet.load_state_dict(torch.load(os.path.join(model_path1, 'anytext_v1.1.ckpt'), map_location=torch.device('cuda')), strict=False)
+        unet = unet.to(device=device, dtype=dtype)
+        print('---->>>>>8888', len(unet.input_blocks), unet.input_blocks[0])
+        diffusion_model = unet
         #------------------------------------------------------
+        diffusion_model = self.model.model.diffusion_model
 
         # sampling
         C, H, W = shape
@@ -415,7 +436,6 @@ class AnyTextModel(torch.nn.Module):
                 # assert unconditional_conditioning is None
                 #------------------------------------------------------------------
                 assert isinstance(cond, dict)
-                diffusion_model = self.model.model.diffusion_model
                 _cond = torch.cat(cond['c_crossattn'], 1)
                 _hint = torch.cat(cond['c_concat'], 1)
                 if use_fp16:
