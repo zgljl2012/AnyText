@@ -8,6 +8,8 @@ Copyright (c) Alibaba, Inc. and its affiliates.
 import os
 from typing import Any, Dict, List, Union, Generator
 
+from anytext.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
+
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 import torch
 import random
@@ -255,20 +257,22 @@ class AnyTextModel(torch.nn.Module):
         if self.use_fp16:
             masked_img = masked_img.half()
         #-----------------------------------
-        # from diffusers import AutoencoderKL
+        from diffusers import AutoencoderKL
         model_path = "E://civital/dreamshaper_8LCM"
+        model_path = 'D:\workspace/aiy-server\data\models\huggingface/runwayml\stable-diffusion-v1-5'
         device = torch.device('cuda')
         dtype = torch.float32
         use_fp16 = False
-        # vae: AutoencoderKL = AutoencoderKL.from_pretrained(
-        #     model_path, subfolder="vae", torch_dtype=dtype
-        # ).cuda()
-        # encoder_posterior = vae.encode(masked_img[None, ...])[0].sample()
-        # masked_x = encoder_posterior.detach()
-        #-----------------------------------
-        encoder_posterior = self.model.encode_first_stage(masked_img[None, ...])
-        masked_x = self.model.get_first_stage_encoding(encoder_posterior).detach()
-        #--------------------------------------
+        #--------
+        vae: AutoencoderKL = AutoencoderKL.from_pretrained(
+            model_path, subfolder="vae", torch_dtype=dtype
+        ).cuda()
+        vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+        from diffusers.image_processor import VaeImageProcessor
+        image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
+        encoder_posterior = vae.encode(masked_img[None, ...])[0]
+        scale_factor = 0.18215
+        masked_x = (scale_factor * encoder_posterior.sample()).detach()
         if self.use_fp16:
             masked_x = masked_x.half()
         info["masked_x"] = torch.cat([masked_x for _ in range(img_count)], dim=0)
@@ -379,6 +383,10 @@ class AnyTextModel(torch.nn.Module):
         seed = random.randint(1, 1000000000)
         generator = torch.Generator(device=device).manual_seed(seed)
         extra_step_kwargs = prepare_extra_step_kwargs(scheduler, generator, eta)
+        
+        #------------------- UNET model------------------------
+        
+        #------------------------------------------------------
 
         # sampling
         C, H, W = shape
@@ -435,44 +443,17 @@ class AnyTextModel(torch.nn.Module):
         samples = img
 
         #--------------------------------------
-        
-        
-        if self.use_fp16:
-            samples = samples.half()
-        x_samples = self.model.decode_first_stage(samples)
-        x_samples = (
-            (einops.rearrange(x_samples, "b c h w -> b h w c") * 127.5 + 127.5)
-            .cpu()
-            .numpy()
-            .clip(0, 255)
-            .astype(np.uint8)
+        images = vae.decode(
+            samples / vae.config.scaling_factor, return_dict=False, generator=generator
+        )[0]
+        images = image_processor.postprocess(
+            images, output_type="pil", do_denormalize=[True] * images.shape[0]
         )
-        results = [x_samples[i] for i in range(img_count)]
-        if (
-            mode == "edit" and False
-        ):  # replace backgound in text editing but not ideal yet
-            results = [r * np_hint + edit_image * (1 - np_hint) for r in results]
-            results = [r.clip(0, 255).astype(np.uint8) for r in results]
-        if len(gly_pos_imgs) > 0 and show_debug:
-            glyph_bs = np.stack(gly_pos_imgs, axis=2)
-            glyph_img = np.sum(glyph_bs, axis=2) * 255
-            glyph_img = glyph_img.clip(0, 255).astype(np.uint8)
-            results += [np.repeat(glyph_img, 3, axis=2)]
-        # debug_info
-        if not show_debug:
-            debug_info = ""
-        else:
-            input_prompt = prompt
-            for t in texts:
-                input_prompt = input_prompt.replace("*", f'"{t}"', 1)
-            debug_info = f'<span style="color:black;font-size:18px">Prompt: </span>{input_prompt}<br> \
-                           <span style="color:black;font-size:18px">Size: </span>{w}x{h}<br> \
-                           <span style="color:black;font-size:18px">Image Count: </span>{img_count}<br> \
-                           <span style="color:black;font-size:18px">Seed: </span>{seed}<br> \
-                           <span style="color:black;font-size:18px">Use FP16: </span>{self.use_fp16}<br> \
-                           <span style="color:black;font-size:18px">Cost Time: </span>{(time.time()-tic):.2f}s'
-        rst_code = 1 if str_warning else 0
-        return results, rst_code, str_warning, debug_info
+        for i, image in enumerate(images):
+            file = f"test-output-{i}.png"
+            image.save(file)
+            print(f"Saved {file}")
+
 
     def init_model(self, **kwargs):
         font_path = kwargs.get("font_path", "font/Arial_Unicode.ttf")
@@ -485,8 +466,6 @@ class AnyTextModel(torch.nn.Module):
         self.model = create_model(
             cfg_path, cond_stage_path=clip_path, use_fp16=self.use_fp16
         )
-        if self.use_fp16:
-            self.model = self.model.half()
         self.model.load_state_dict(
             load_state_dict(ckpt_path, location="cuda"), strict=False
         )

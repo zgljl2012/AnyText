@@ -67,12 +67,12 @@ class AiyAnyText:
         # 1. text generation
         mode = "text-generation"
         input_data = {"prompt": prompt, "seed": seed, "draw_pos": draw_pos_path}
-        results, rtn_code, rtn_warning, debug_info = self.pipe(
+        self.pipe(
             input_data, mode=mode, **params
         )
-        if rtn_warning:
-            print(rtn_warning)
-        if rtn_code >= 0:
-            imgs = [Image.fromarray(i) for i in results]
-            return imgs
+        # if rtn_warning:
+        #     print(rtn_warning)
+        # if rtn_code >= 0:
+        #     imgs = [Image.fromarray(i) for i in results]
+        #     return imgs
         return []
