@@ -18,16 +18,12 @@ import einops
 import time
 from PIL import ImageFont
 from anytext.cldm.model import create_model, load_state_dict
-from anytext.cldm.ddim_hacked import DDIMSampler
 from anytext.t3_dataset import draw_glyph, draw_glyph2
 from anytext.util import check_channels, resize_image
 from pytorch_lightning import seed_everything
 from modelscope.pipelines import pipeline
 from modelscope.utils.constant import Tasks
-from modelscope.preprocessors.base import Preprocessor
-from modelscope.pipelines.base import Model, Pipeline
 from anytext.bert_tokenizer import BasicTokenizer
-from abc import ABC, abstractmethod
 from PIL import Image
 import numpy
 from modelscope.msdatasets import MsDataset
@@ -39,7 +35,7 @@ BBOX_MAX_NUM = 8
 PLACE_HOLDER = "*"
 max_chars = 20
 
-from .utils import is_chinese, separate_pos_imgs, arr2tensor, find_polygon
+from .utils import is_chinese, separate_pos_imgs, arr2tensor, find_polygon, prepare_extra_step_kwargs
 
 
 def noise_like(shape, device, repeat=False):
@@ -258,31 +254,110 @@ class AnyTextModel(torch.nn.Module):
         masked_img = torch.from_numpy(masked_img.copy()).float().cuda()
         if self.use_fp16:
             masked_img = masked_img.half()
+        #-----------------------------------
+        # from diffusers import AutoencoderKL
+        model_path = "E://civital/dreamshaper_8LCM"
+        device = torch.device('cuda')
+        dtype = torch.float32
+        use_fp16 = False
+        # vae: AutoencoderKL = AutoencoderKL.from_pretrained(
+        #     model_path, subfolder="vae", torch_dtype=dtype
+        # ).cuda()
+        # encoder_posterior = vae.encode(masked_img[None, ...])[0].sample()
+        # masked_x = encoder_posterior.detach()
+        #-----------------------------------
         encoder_posterior = self.model.encode_first_stage(masked_img[None, ...])
         masked_x = self.model.get_first_stage_encoding(encoder_posterior).detach()
+        #--------------------------------------
         if self.use_fp16:
             masked_x = masked_x.half()
         info["masked_x"] = torch.cat([masked_x for _ in range(img_count)], dim=0)
 
         hint = arr2tensor(np_hint, img_count)
-        cond = self.model.get_learned_conditioning(
-            dict(
-                c_concat=[hint],
-                c_crossattn=[[prompt + " , " + a_prompt] * img_count],
-                text_info=info,
+        #-------------------------------------------------------------
+        from anytext.cldm.embedding_manager import EmbeddingManager
+        from transformers import CLIPTokenizer, CLIPTextModel, CLIPImageProcessor
+        from easydict import EasyDict as edict
+
+        tokenizer = CLIPTokenizer.from_pretrained(model_path, subfolder="tokenizer")
+
+        class A:
+            def __init__(self):
+                self.tokenizer = tokenizer
+
+        embedding_manager = EmbeddingManager(
+            embedder=A(),
+            emb_type="ocr",  # ocr, vit, conv
+            glyph_channels=1,
+            position_channels=1,
+            add_pos=False,
+            placeholder_string="*",
+            use_fp16=use_fp16,
+        ).cuda()
+        # recog
+        args = edict()
+        args.rec_image_shape = "3, 48, 320"
+        args.rec_batch_num = 6
+        args.rec_char_dict_path = "anytext/ocr_recog/ppocr_keys_v1.txt"
+        args.use_fp16 = use_fp16
+        from anytext.cldm.recognizer import TextRecognizer, create_predictor
+        text_predictor = create_predictor(use_fp16=use_fp16).eval()
+        text_predictor = text_predictor.cuda()
+        cn_recognizer = TextRecognizer(args, text_predictor)
+        embedding_manager.recog = cn_recognizer
+        embedding_manager.encode_text(info)
+        from anytext.ldm.modules.encoders.modules import FrozenCLIPEmbedderT3
+
+        cond_stage_model = (
+            FrozenCLIPEmbedderT3(
+                version="E://.modelscope/damo/cv_anytext_text_generation_editing/clip-vit-large-patch14"
             )
+            .cuda()
+            .to(dtype=dtype)
         )
-        un_cond = self.model.get_learned_conditioning(
-            dict(c_concat=[hint], c_crossattn=[[n_prompt] * img_count], text_info=info)
+        cond_txt = cond_stage_model.encode(
+            [prompt + " , " + a_prompt] * img_count, embedding_manager=embedding_manager
         )
+        cond = dict(
+            c_concat=[hint],
+            c_crossattn=[cond_txt],
+            text_info=info,
+        )
+        #---------------------------------------------------------------
         shape = (4, h // 8, w // 8)
-        self.model.control_scales = [strength] * 13
+        control_scales = [strength] * 13
         
         #------------------------------------------
         conditioning= cond
         batch_size = img_count
-        unconditional_guidance_scale = cfg_scale
-        unconditional_conditioning = un_cond
+        # unconditional_guidance_scale = cfg_scale
+        # unconditional_conditioning = un_cond
+        
+        #------------ control model-----
+        from cldm.cldm import ControlNet
+        control_model = ControlNet(
+            image_size=32, # unused
+            in_channels=4,
+            model_channels=320,
+            glyph_channels=1,
+            position_channels=1,
+            attention_resolutions=[ 4, 2, 1 ],
+            num_res_blocks=2,
+            channel_mult=[ 1, 2, 4, 4 ],
+            num_heads=8,
+            use_spatial_transformer=True,
+            transformer_depth=1,
+            context_dim=768,
+            use_checkpoint=True,
+            legacy=False,
+            use_fp16=use_fp16
+        )
+        import os
+        model_path1 = 'E://.modelscope/damo/cv_anytext_text_generation_editing'
+        ckpt_path = os.path.join(model_path1, f'anytext_control_model_v1.1.ckpt')
+        control_model.load_state_dict(torch.load(ckpt_path, map_location=torch.device('cuda')), strict=False)
+        control_model = control_model.to(device=device, dtype=dtype)
+        #--------------------------------- 
         
         assert isinstance(conditioning, dict)
         ctmp = conditioning[list(conditioning.keys())[0]]
@@ -295,69 +370,67 @@ class AnyTextModel(torch.nn.Module):
             )
         
         from diffusers.schedulers import DDIMScheduler
-        model_path = "E://civital/dreamshaper_8LCM"
         scheduler: DDIMScheduler = DDIMScheduler.from_pretrained(
             model_path, subfolder="scheduler"
         )
+        scheduler.set_timesteps(ddim_steps, device=device)
+        timesteps = scheduler.timesteps
+        
+        seed = random.randint(1, 1000000000)
+        generator = torch.Generator(device=device).manual_seed(seed)
+        extra_step_kwargs = prepare_extra_step_kwargs(scheduler, generator, eta)
 
-        self.ddim_sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=eta, verbose=False)
         # sampling
         C, H, W = shape
         shape = (batch_size, C, H, W)
         print(f"Data shape for DDIM sampling is {shape}, eta {eta}")
         
         #------
-        device = self.model.betas.device
         b = shape[0]
 
-        timesteps = self.ddim_sampler.ddim_timesteps
-
-        time_range = np.flip(timesteps)
         total_steps = timesteps.shape[0]
         print(f"Running DDIM Sampling with {total_steps} timesteps")
 
         img = torch.randn(shape, device=device)
         from tqdm import tqdm
-        iterator = tqdm(time_range, desc="DDIM Sampler", total=total_steps)
 
-        for i, step in enumerate(iterator):
-            index = total_steps - i - 1
-            ts = torch.full((b,), step, device=device, dtype=torch.long)
+        with tqdm(total=total_steps) as progress_bar:
+            for i, step in enumerate(timesteps):
+                # index = total_steps - i - 1
+                ts = torch.full((b,), step, device=device, dtype=torch.long)
 
-            #-----------------------------------------------------------------------
-            x = img
-            c = cond
-            t = ts
-            b, *_, device = *x.shape, x.device
-            
-            # 先完全忽略负面提示词
-            # assert unconditional_conditioning is None
-            model_output = self.model.apply_model(x, t, c)
-            # self.model.parameterization == 'eps'
-            e_t = model_output
-
-            alphas = self.ddim_sampler.ddim_alphas
-            alphas_prev = self.ddim_sampler.ddim_alphas_prev
-            sqrt_one_minus_alphas = self.ddim_sampler.ddim_sqrt_one_minus_alphas
-            sigmas = self.ddim_sampler.ddim_sigmas
-            # select parameters corresponding to the currently considered timestep
-            a_t = torch.full((b, 1, 1, 1), alphas[index], device=device)
-            a_prev = torch.full((b, 1, 1, 1), alphas_prev[index], device=device)
-            sigma_t = torch.full((b, 1, 1, 1), sigmas[index], device=device)
-            sqrt_one_minus_at = torch.full(
-                (b, 1, 1, 1), sqrt_one_minus_alphas[index], device=device
-            )
-
-            # current prediction for x_0
-            pred_x0 = (x - sqrt_one_minus_at * e_t) / a_t.sqrt()
-
-            # direction pointing to x_t
-            dir_xt = (1.0 - a_prev - sigma_t**2).sqrt() * e_t
-            noise = sigma_t * noise_like(x.shape, device, False)
-            x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
-            
-            #-------------------------------------------------------------------------
-            img, _ = x_prev, pred_x0
+                #-----------------------------------------------------------------------
+                x = img
+                t = ts
+                
+                # 先完全忽略负面提示词
+                # assert unconditional_conditioning is None
+                #------------------------------------------------------------------
+                assert isinstance(cond, dict)
+                diffusion_model = self.model.model.diffusion_model
+                _cond = torch.cat(cond['c_crossattn'], 1)
+                _hint = torch.cat(cond['c_concat'], 1)
+                if use_fp16:
+                    x = x.half()
+                control = control_model(x=x, timesteps=ts, context=_cond, hint=_hint, text_info=cond['text_info'])
+                control = [c * scale for c, scale in zip(control, control_scales)]
+                eps = diffusion_model(x=x, timesteps=t, context=_cond, control=control, only_mid_control=False)
+                #--------
+                model_output = eps
+                e_t = model_output.to(device)
+                #--------------------------------------------------------------------
+                
+                x_prev = scheduler.step(
+                    e_t,
+                    step,
+                    x,
+                    **extra_step_kwargs,
+                    return_dict=False,
+                )[0]
+                
+                #-------------------------------------------------------------------------
+                img = x_prev
+                progress_bar.update()
 
         samples = img
 
@@ -418,7 +491,6 @@ class AnyTextModel(torch.nn.Module):
             load_state_dict(ckpt_path, location="cuda"), strict=False
         )
         self.model.eval()
-        self.ddim_sampler = DDIMSampler(self.model)
         if self.use_translator:
             self.trans_pipe = pipeline(
                 task=Tasks.translation,
