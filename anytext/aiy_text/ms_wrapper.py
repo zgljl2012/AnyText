@@ -64,8 +64,6 @@ class AnyTextModel(torch.nn.Module):
 
     @torch.no_grad()
     def forward(self, input_tensor, **forward_params):
-        tic = time.time()
-        str_warning = ""
         # get inputs
         seed = input_tensor.get("seed", -1)
         if seed == -1:
@@ -77,7 +75,6 @@ class AnyTextModel(torch.nn.Module):
 
         mode = forward_params.get("mode")
         sort_priority = forward_params.get("sort_priority", "↕")
-        show_debug = forward_params.get("show_debug", False)
         revise_pos = forward_params.get("revise_pos", False)
         img_count = forward_params.get("image_count", 4)
         ddim_steps = forward_params.get("ddim_steps", 20)
@@ -259,7 +256,7 @@ class AnyTextModel(torch.nn.Module):
         #-----------------------------------
         from diffusers import AutoencoderKL
         model_path = "E://civital/dreamshaper_8LCM"
-        model_path = 'D:\workspace/aiy-server\data\models\huggingface/runwayml\stable-diffusion-v1-5'
+        # model_path = 'D:\workspace/aiy-server\data\models\huggingface/runwayml\stable-diffusion-v1-5'
         device = torch.device('cuda')
         dtype = torch.float32
         use_fp16 = False
@@ -373,8 +370,8 @@ class AnyTextModel(torch.nn.Module):
                 f"Warning: Got {cbs} conditionings but batch-size is {batch_size}"
             )
         
-        from diffusers.schedulers import DDIMScheduler
-        scheduler: DDIMScheduler = DDIMScheduler.from_pretrained(
+        from diffusers.schedulers import DDIMScheduler, LCMScheduler
+        scheduler: LCMScheduler = LCMScheduler.from_pretrained(
             model_path, subfolder="scheduler"
         )
         scheduler.set_timesteps(ddim_steps, device=device)
@@ -385,29 +382,31 @@ class AnyTextModel(torch.nn.Module):
         extra_step_kwargs = prepare_extra_step_kwargs(scheduler, generator, eta)
         
         #------------------- UNET model------------------------
-        unet_config = dict(
-            image_size= 32, # unused
-            in_channels= 4,
-            out_channels= 4,
-            model_channels= 320,
-            attention_resolutions= [ 4, 2, 1 ],
-            num_res_blocks= 2,
-            channel_mult= [ 1, 2, 4, 4 ],
-            num_heads= 8,
-            use_spatial_transformer= True,
-            transformer_depth= 1,
-            context_dim=768,
-            use_checkpoint= True,
-            legacy= False
-        )
-        from cldm.cldm import ControlledUnetModel
-        unet = ControlledUnetModel(**unet_config)
-        unet.load_state_dict(torch.load(os.path.join(model_path1, 'anytext_v1.1.ckpt'), map_location=torch.device('cuda')), strict=False)
-        unet = unet.to(device=device, dtype=dtype)
-        print('---->>>>>8888', len(unet.input_blocks), unet.input_blocks[0])
-        diffusion_model = unet
+        # unet_config = dict(
+        #     image_size= 32, # unused
+        #     in_channels= 4,
+        #     out_channels= 4,
+        #     model_channels= 320,
+        #     attention_resolutions= [ 4, 2, 1 ],
+        #     num_res_blocks= 2,
+        #     channel_mult= [ 1, 2, 4, 4 ],
+        #     num_heads= 8,
+        #     use_spatial_transformer= True,
+        #     transformer_depth= 1,
+        #     context_dim=768,
+        #     use_checkpoint= True,
+        #     legacy= False
+        # )
+        # from cldm.cldm import ControlledUnetModel
+        # unet = ControlledUnetModel(**unet_config)
+        # unet.load_state_dict(torch.load(os.path.join(model_path1, 'anytext_unet_v1.1.ckpt'), map_location=torch.device('cuda')), strict=False)
+        # unet = unet.to(device=device, dtype=dtype)
         #------------------------------------------------------
-        diffusion_model = self.model.model.diffusion_model
+        from diffusers import UNet2DConditionModel
+        unet = UNet2DConditionModel.from_pretrained(
+            model_path, subfolder="unet", torch_dtype=dtype
+        ).cuda()
+        #------------------------------------------------------
 
         # sampling
         C, H, W = shape
@@ -442,11 +441,28 @@ class AnyTextModel(torch.nn.Module):
                     x = x.half()
                 control = control_model(x=x, timesteps=ts, context=_cond, hint=_hint, text_info=cond['text_info'])
                 control = [c * scale for c, scale in zip(control, control_scales)]
-                eps = diffusion_model(x=x, timesteps=t, context=_cond, control=control, only_mid_control=False)
+                # eps = unet(x=x, timesteps=t, context=_cond, control=control, only_mid_control=False)
+                
                 #--------
-                model_output = eps
-                e_t = model_output.to(device)
+                # model_output = eps
+                # e_t = model_output.to(device)
                 #--------------------------------------------------------------------
+                
+                mid_block_additional_residual = control.pop()
+                down_block_additional_residuals = control
+                
+                noise_pred = unet(
+                    x,
+                    t,
+                    encoder_hidden_states=_cond,
+                    timestep_cond=None,
+                    cross_attention_kwargs=None,
+                    added_cond_kwargs={},
+                    return_dict=False,
+                    mid_block_additional_residual=mid_block_additional_residual,
+                    down_block_additional_residuals=down_block_additional_residuals,
+                )[0]
+                e_t = noise_pred
                 
                 x_prev = scheduler.step(
                     e_t,
@@ -478,25 +494,25 @@ class AnyTextModel(torch.nn.Module):
     def init_model(self, **kwargs):
         font_path = kwargs.get("font_path", "font/Arial_Unicode.ttf")
         self.font = ImageFont.truetype(font_path, size=60)
-        cfg_path = kwargs.get("cfg_path", "models_yaml/anytext_sd15.yaml")
-        ckpt_path = kwargs.get(
-            "model_path", os.path.join(self.model_dir, "anytext_v1.1.ckpt")
-        )
-        clip_path = os.path.join(self.model_dir, "clip-vit-large-patch14")
-        self.model = create_model(
-            cfg_path, cond_stage_path=clip_path, use_fp16=self.use_fp16
-        )
-        self.model.load_state_dict(
-            load_state_dict(ckpt_path, location="cuda"), strict=False
-        )
-        self.model.eval()
-        if self.use_translator:
-            self.trans_pipe = pipeline(
-                task=Tasks.translation,
-                model=os.path.join(self.model_dir, "nlp_csanmt_translation_zh2en"),
-            )
-        else:
-            self.trans_pipe = None
+        # cfg_path = kwargs.get("cfg_path", "models_yaml/anytext_sd15.yaml")
+        # ckpt_path = kwargs.get(
+        #     "model_path", os.path.join(self.model_dir, "anytext_v1.1.ckpt")
+        # )
+        # clip_path = os.path.join(self.model_dir, "clip-vit-large-patch14")
+        # self.model = create_model(
+        #     cfg_path, cond_stage_path=clip_path, use_fp16=self.use_fp16
+        # )
+        # self.model.load_state_dict(
+        #     load_state_dict(ckpt_path, location="cuda"), strict=False
+        # )
+        # self.model.eval()
+        # if self.use_translator:
+        #     self.trans_pipe = pipeline(
+        #         task=Tasks.translation,
+        #         model=os.path.join(self.model_dir, "nlp_csanmt_translation_zh2en"),
+        #     )
+        # else:
+        #     self.trans_pipe = None
 
     def modify_prompt(self, prompt):
         prompt = prompt.replace("“", '"')
