@@ -22,5 +22,23 @@ def test2():
     for i, img in enumerate(imgs):
         img.save(f'test-2-{i}.png')
 
+def test3():
+    """ 文本 + 图片编辑 """
+    aiy_pipe = aiy.AiyAnyText()
+    # test-generation
+    ref = 'example_images/ref2.jpg'
+    draw_pos_path = 'example_images/edit2.png'
+    imgs = aiy_pipe.text_generation('"Close"',
+                            draw_pos_path,
+                            ori_image=ref,
+                            mode='text-editing',
+                            n_steps=4,
+                            width=768,
+                            height=768,
+                            seed=-1)
+    for i, img in enumerate(imgs):
+        img.save(f'test-2-{i}.png')
+
+
 if __name__ == '__main__':
-    test2()
+    test3()

@@ -1,6 +1,6 @@
 from anytext.util import save_images
 from PIL import Image
-from typing import List
+from typing import List, Optional
 import sys
 import os
 import torch
@@ -50,23 +50,26 @@ class AiyAnyText:
     def text_generation(
         self,
         prompt: str,
-        draw_pos_path=str,
+        draw_pos_path: str,
+        ori_image: str=None,
         n_steps: int = 20,
         seed: int = 1,
         show_debug=True,
         image_count=1,
+        width=512,
+        height=512,
+        mode = 'text-generation' # 'text-generation', 'text-editing'
     ) -> List[Image.Image]:
         params = {
             "show_debug": show_debug,
             "image_count": image_count,
             "ddim_steps": n_steps,
-            "image_width": 512,
-            "image_height": 512,
+            "image_width": width,
+            "image_height": height,
         }
 
         # 1. text generation
-        mode = "text-generation"
-        input_data = {"prompt": prompt, "seed": seed, "draw_pos": draw_pos_path}
+        input_data = {"prompt": prompt, "seed": seed, "draw_pos": draw_pos_path, 'ori_image': ori_image}
         self.pipe(
             input_data, mode=mode, **params
         )

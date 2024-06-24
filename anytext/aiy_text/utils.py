@@ -108,3 +108,60 @@ def prepare_extra_step_kwargs(scheduler, generator, eta):
     if accepts_generator:
         extra_step_kwargs["generator"] = generator
     return extra_step_kwargs
+
+def check_overlap_polygon(rect_pts1, rect_pts2):
+    poly1 = cv2.convexHull(rect_pts1)
+    poly2 = cv2.convexHull(rect_pts2)
+    rect1 = cv2.boundingRect(poly1)
+    rect2 = cv2.boundingRect(poly2)
+    if rect1[0] + rect1[2] >= rect2[0] and rect2[0] + rect2[2] >= rect1[0] and rect1[1] + rect1[3] >= rect2[1] and rect2[1] + rect2[3] >= rect1[1]:
+        return True
+    return False
+
+def generate_rectangles(w, h, n, max_trys=200):
+    img = np.zeros((h, w, 1), dtype=np.uint8)
+    rectangles = []
+    attempts = 0
+    n_pass = 0
+    low_edge = int(max(w, h)*0.3 if n <= 3 else max(w, h)*0.2)  # ~150, ~100
+    while attempts < max_trys:
+        rect_w = min(np.random.randint(max((w*0.5)//n, low_edge), w), int(w*0.8))
+        ratio = np.random.uniform(4, 10)
+        rect_h = max(low_edge, int(rect_w/ratio))
+        rect_h = min(rect_h, int(h*0.8))
+        # gen rotate angle
+        rotation_angle = 0
+        rand_value = np.random.rand()
+        if rand_value < 0.7:
+            pass
+        elif rand_value < 0.8:
+            rotation_angle = np.random.randint(0, 40)
+        elif rand_value < 0.9:
+            rotation_angle = np.random.randint(140, 180)
+        else:
+            rotation_angle = np.random.randint(85, 95)
+        # rand position
+        x = np.random.randint(0, w - rect_w)
+        y = np.random.randint(0, h - rect_h)
+        # get vertex
+        rect_pts = cv2.boxPoints(((rect_w/2, rect_h/2), (rect_w, rect_h), rotation_angle))
+        rect_pts = np.int32(rect_pts)
+        # move
+        rect_pts += (x, y)
+        # check boarder
+        if np.any(rect_pts < 0) or np.any(rect_pts[:, 0] >= w) or np.any(rect_pts[:, 1] >= h):
+            attempts += 1
+            continue
+        # check overlap
+        if any(check_overlap_polygon(rect_pts, rp) for rp in rectangles):
+            attempts += 1
+            continue
+        n_pass += 1
+        cv2.fillPoly(img, [rect_pts], 255)
+        rectangles.append(rect_pts)
+        if n_pass == n:
+            break
+    print("attempts:", attempts)
+    if len(rectangles) != n:
+        raise Exception(f'Failed in auto generate positions after {attempts} attempts, try again!')
+    return img

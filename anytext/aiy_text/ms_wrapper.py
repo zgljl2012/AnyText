@@ -26,7 +26,7 @@ Input = Union[str, tuple, 'Image.Image', 'numpy.ndarray']
 PLACE_HOLDER = "*"
 max_chars = 20
 
-from .utils import is_chinese, separate_pos_imgs, arr2tensor, find_polygon, prepare_extra_step_kwargs
+from .utils import generate_rectangles, is_chinese, separate_pos_imgs, arr2tensor, find_polygon, prepare_extra_step_kwargs
 
 
 def noise_like(shape, device, repeat=False):
@@ -60,7 +60,6 @@ class AnyTextModel(torch.nn.Module):
         seed_everything(seed)
         prompt = input_tensor.get("prompt")
         draw_pos = input_tensor.get("draw_pos")
-        print('------->>>>>0000', draw_pos)
         ori_image = input_tensor.get("ori_image")
 
         mode = forward_params.get("mode")
@@ -95,7 +94,6 @@ class AnyTextModel(torch.nn.Module):
             edit_image = np.ones((h, w, 3)) * 127.5  # empty mask image
         elif mode in ["text-editing", "edit"]:
             if draw_pos is None or ori_image is None:
-                print('---->>>>>111 break return')
                 return (
                     None,
                     -1,
@@ -103,6 +101,7 @@ class AnyTextModel(torch.nn.Module):
                     "",
                 )
             if isinstance(ori_image, str):
+                img = cv2.imread(ori_image)
                 ori_image = cv2.imread(ori_image)[..., ::-1]
                 assert (
                     ori_image is not None
@@ -121,7 +120,8 @@ class AnyTextModel(torch.nn.Module):
             h, w = edit_image.shape[:2]  # change h, w by input ref_img
         # preprocess pos_imgs(if numpy, make sure it's white pos in black bg)
         if draw_pos is None:
-            pos_imgs = np.zeros((w, h, 1))
+            # 自动生成
+            pos_imgs = generate_rectangles(w, h, n_lines, max_trys=500)
         elif isinstance(draw_pos, str):
             draw_pos = cv2.imread(draw_pos)[..., ::-1]
             assert draw_pos is not None, f"Can't read draw_pos image from{draw_pos}!"
@@ -132,7 +132,6 @@ class AnyTextModel(torch.nn.Module):
             assert isinstance(
                 draw_pos, np.ndarray
             ), f"Unknown format of draw_pos: {type(draw_pos)}"
-        print('----->>>>>2222')
         pos_imgs = pos_imgs[..., 0:1]
         pos_imgs = cv2.convertScaleAbs(pos_imgs)
         _, pos_imgs = cv2.threshold(pos_imgs, 254, 255, cv2.THRESH_BINARY)
@@ -144,15 +143,9 @@ class AnyTextModel(torch.nn.Module):
             if n_lines == 1 and texts[0] == " ":
                 pass  # text-to-image without text
             else:
-                print('------>>>>>>3')
-                return (
-                    None,
-                    -1,
-                    f"Found {len(pos_imgs)} positions that < needed {n_lines} from prompt, check and try again!",
-                    "",
-                )
+                raise Exception(f"Found {len(pos_imgs)} positions that < needed {n_lines} from prompt, check and try again!")
         elif len(pos_imgs) > n_lines:
-            str_warning = f"Warning: found {len(pos_imgs)} positions that > needed {n_lines} from prompt."
+            print(f"Warning: found {len(pos_imgs)} positions that > needed {n_lines} from prompt.")
         # get pre_pos, poly_list, hint that needed for anytext
         pre_pos = []
         poly_list = []
