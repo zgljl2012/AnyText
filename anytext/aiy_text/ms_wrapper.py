@@ -8,32 +8,21 @@ Copyright (c) Alibaba, Inc. and its affiliates.
 import os
 from typing import Any, Dict, List, Union, Generator
 
-from anytext.ldm.models.diffusion.ddpm import DiffusionWrapper
-
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 import torch
 import random
 import re
 import numpy as np
 import cv2
-import einops
-import time
 from PIL import ImageFont
-from anytext.cldm.model import create_model, load_state_dict
 from anytext.t3_dataset import draw_glyph, draw_glyph2
 from anytext.util import check_channels, resize_image
 from pytorch_lightning import seed_everything
-from modelscope.pipelines import pipeline
-from modelscope.utils.constant import Tasks
-from anytext.bert_tokenizer import BasicTokenizer
 from PIL import Image
 import numpy
-from modelscope.msdatasets import MsDataset
 
-Input = Union[str, tuple, MsDataset, 'Image.Image', 'numpy.ndarray']
+Input = Union[str, tuple, 'Image.Image', 'numpy.ndarray']
 
-checker = BasicTokenizer()
-BBOX_MAX_NUM = 8
 PLACE_HOLDER = "*"
 max_chars = 20
 
@@ -281,6 +270,16 @@ class AnyTextModel(torch.nn.Module):
         from easydict import EasyDict as edict
 
         tokenizer = CLIPTokenizer.from_pretrained(model_path, subfolder="tokenizer")
+        
+        text_inputs = tokenizer(
+            prompt + " , " + a_prompt,
+            padding="max_length",
+            max_length=tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+        #  tokenizer 结果
+        text_input_ids = text_inputs.input_ids
 
         class A:
             def __init__(self):
@@ -307,29 +306,19 @@ class AnyTextModel(torch.nn.Module):
         cn_recognizer = TextRecognizer(args, text_predictor)
         embedding_manager.recog = cn_recognizer
         embedding_manager.encode_text(info)
-        from anytext.ldm.modules.encoders.modules import FrozenCLIPEmbedderT3
-
-        cond_stage_model = (
-            FrozenCLIPEmbedderT3(
-                version="E://.modelscope/damo/cv_anytext_text_generation_editing/clip-vit-large-patch14"
-            )
-            .cuda()
-            .to(dtype=dtype)
-        )
-        cond_txt = cond_stage_model.encode(
-            [prompt + " , " + a_prompt] * img_count, embedding_manager=embedding_manager
-        )
-        cond = dict(
-            c_concat=[hint],
-            c_crossattn=[cond_txt],
-            text_info=info,
+        #-------------------------------
+        from .aiy_clip_text_model import AiyCLIPTextModel
+        text_encoder: AiyCLIPTextModel = AiyCLIPTextModel.from_pretrained(
+            model_path, subfolder="text_encoder", torch_dtype=dtype
+        ).cuda()
+        prompt_embeds = text_encoder(
+            text_input_ids.to(device), embedding_manager=embedding_manager
         )
         #---------------------------------------------------------------
         shape = (4, h // 8, w // 8)
         control_scales = [strength] * 13
         
         #------------------------------------------
-        conditioning= cond
         batch_size = img_count
         # unconditional_guidance_scale = cfg_scale
         # unconditional_conditioning = un_cond
@@ -358,17 +347,7 @@ class AnyTextModel(torch.nn.Module):
         ckpt_path = os.path.join(model_path1, f'anytext_control_model_v1.1.ckpt')
         control_model.load_state_dict(torch.load(ckpt_path, map_location=torch.device('cuda')), strict=False)
         control_model = control_model.to(device=device, dtype=dtype)
-        #--------------------------------- 
-        
-        assert isinstance(conditioning, dict)
-        ctmp = conditioning[list(conditioning.keys())[0]]
-        while isinstance(ctmp, list):
-            ctmp = ctmp[0]
-        cbs = ctmp.shape[0]
-        if cbs != batch_size:
-            print(
-                f"Warning: Got {cbs} conditionings but batch-size is {batch_size}"
-            )
+        #---------------------------------
         
         from diffusers.schedulers import DDIMScheduler, LCMScheduler
         scheduler: LCMScheduler = LCMScheduler.from_pretrained(
@@ -381,26 +360,6 @@ class AnyTextModel(torch.nn.Module):
         generator = torch.Generator(device=device).manual_seed(seed)
         extra_step_kwargs = prepare_extra_step_kwargs(scheduler, generator, eta)
         
-        #------------------- UNET model------------------------
-        # unet_config = dict(
-        #     image_size= 32, # unused
-        #     in_channels= 4,
-        #     out_channels= 4,
-        #     model_channels= 320,
-        #     attention_resolutions= [ 4, 2, 1 ],
-        #     num_res_blocks= 2,
-        #     channel_mult= [ 1, 2, 4, 4 ],
-        #     num_heads= 8,
-        #     use_spatial_transformer= True,
-        #     transformer_depth= 1,
-        #     context_dim=768,
-        #     use_checkpoint= True,
-        #     legacy= False
-        # )
-        # from cldm.cldm import ControlledUnetModel
-        # unet = ControlledUnetModel(**unet_config)
-        # unet.load_state_dict(torch.load(os.path.join(model_path1, 'anytext_unet_v1.1.ckpt'), map_location=torch.device('cuda')), strict=False)
-        # unet = unet.to(device=device, dtype=dtype)
         #------------------------------------------------------
         from diffusers import UNet2DConditionModel
         unet = UNet2DConditionModel.from_pretrained(
@@ -434,19 +393,13 @@ class AnyTextModel(torch.nn.Module):
                 # 先完全忽略负面提示词
                 # assert unconditional_conditioning is None
                 #------------------------------------------------------------------
-                assert isinstance(cond, dict)
-                _cond = torch.cat(cond['c_crossattn'], 1)
-                _hint = torch.cat(cond['c_concat'], 1)
+                # assert isinstance(cond, dict)
+                _cond = prompt_embeds
+                _hint = hint
                 if use_fp16:
                     x = x.half()
-                control = control_model(x=x, timesteps=ts, context=_cond, hint=_hint, text_info=cond['text_info'])
+                control = control_model(x=x, timesteps=ts, context=_cond, hint=_hint, text_info=info)
                 control = [c * scale for c, scale in zip(control, control_scales)]
-                # eps = unet(x=x, timesteps=t, context=_cond, control=control, only_mid_control=False)
-                
-                #--------
-                # model_output = eps
-                # e_t = model_output.to(device)
-                #--------------------------------------------------------------------
                 
                 mid_block_additional_residual = control.pop()
                 down_block_additional_residuals = control
@@ -494,25 +447,6 @@ class AnyTextModel(torch.nn.Module):
     def init_model(self, **kwargs):
         font_path = kwargs.get("font_path", "font/Arial_Unicode.ttf")
         self.font = ImageFont.truetype(font_path, size=60)
-        # cfg_path = kwargs.get("cfg_path", "models_yaml/anytext_sd15.yaml")
-        # ckpt_path = kwargs.get(
-        #     "model_path", os.path.join(self.model_dir, "anytext_v1.1.ckpt")
-        # )
-        # clip_path = os.path.join(self.model_dir, "clip-vit-large-patch14")
-        # self.model = create_model(
-        #     cfg_path, cond_stage_path=clip_path, use_fp16=self.use_fp16
-        # )
-        # self.model.load_state_dict(
-        #     load_state_dict(ckpt_path, location="cuda"), strict=False
-        # )
-        # self.model.eval()
-        # if self.use_translator:
-        #     self.trans_pipe = pipeline(
-        #         task=Tasks.translation,
-        #         model=os.path.join(self.model_dir, "nlp_csanmt_translation_zh2en"),
-        #     )
-        # else:
-        #     self.trans_pipe = None
 
     def modify_prompt(self, prompt):
         prompt = prompt.replace("“", '"')
