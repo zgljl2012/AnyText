@@ -60,6 +60,7 @@ class AnyTextModel(torch.nn.Module):
         seed_everything(seed)
         prompt = input_tensor.get("prompt")
         draw_pos = input_tensor.get("draw_pos")
+        print('------->>>>>0000', draw_pos)
         ori_image = input_tensor.get("ori_image")
 
         mode = forward_params.get("mode")
@@ -94,6 +95,7 @@ class AnyTextModel(torch.nn.Module):
             edit_image = np.ones((h, w, 3)) * 127.5  # empty mask image
         elif mode in ["text-editing", "edit"]:
             if draw_pos is None or ori_image is None:
+                print('---->>>>>111 break return')
                 return (
                     None,
                     -1,
@@ -120,7 +122,7 @@ class AnyTextModel(torch.nn.Module):
         # preprocess pos_imgs(if numpy, make sure it's white pos in black bg)
         if draw_pos is None:
             pos_imgs = np.zeros((w, h, 1))
-        if isinstance(draw_pos, str):
+        elif isinstance(draw_pos, str):
             draw_pos = cv2.imread(draw_pos)[..., ::-1]
             assert draw_pos is not None, f"Can't read draw_pos image from{draw_pos}!"
             pos_imgs = 255 - draw_pos
@@ -130,6 +132,7 @@ class AnyTextModel(torch.nn.Module):
             assert isinstance(
                 draw_pos, np.ndarray
             ), f"Unknown format of draw_pos: {type(draw_pos)}"
+        print('----->>>>>2222')
         pos_imgs = pos_imgs[..., 0:1]
         pos_imgs = cv2.convertScaleAbs(pos_imgs)
         _, pos_imgs = cv2.threshold(pos_imgs, 254, 255, cv2.THRESH_BINARY)
@@ -141,6 +144,7 @@ class AnyTextModel(torch.nn.Module):
             if n_lines == 1 and texts[0] == " ":
                 pass  # text-to-image without text
             else:
+                print('------>>>>>>3')
                 return (
                     None,
                     -1,

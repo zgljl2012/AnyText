@@ -70,9 +70,4 @@ class AiyAnyText:
         self.pipe(
             input_data, mode=mode, **params
         )
-        # if rtn_warning:
-        #     print(rtn_warning)
-        # if rtn_code >= 0:
-        #     imgs = [Image.fromarray(i) for i in results]
-        #     return imgs
         return []
